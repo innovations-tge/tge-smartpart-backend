@@ -1,83 +1,66 @@
 const express = require("express");
-const multer = require("multer");
+const bodyParser = require("body-parser");
 const cors = require("cors");
-const { Configuration, OpenAIApi } = require("openai");
-const fs = require("fs");
-const path = require("path");
-
+const multer = require("multer");
+const { OpenAI } = require("openai");
 require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 10000;
 
+// Middleware
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
-// Multer for file uploads (stored in memory)
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+// File upload config
+const upload = multer({ storage: multer.memoryStorage() });
 
-// OpenAI setup
-const configuration = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY, // Store your key in Render as env var
+// OpenAI config
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 });
-const openai = new OpenAIApi(configuration);
 
-// Endpoint
-app.post("/analyze-part", upload.single("photo"), async (req, res) => {
+// POST endpoint for smart part checker
+app.post("/check-part", upload.single("photo"), async (req, res) => {
+  const { brand, partNumber, description } = req.body;
+  const file = req.file; // optional
+
+  if (!brand || !partNumber) {
+    return res.status(400).json({ error: "Brand and part number are required." });
+  }
+
   try {
-    const { brand, partNumber, description } = req.body;
-    const file = req.file;
-
-    if (!brand || !partNumber) {
-      return res.status(400).json({ error: "Brand and partNumber are required." });
-    }
-
-    let fileDetails = file ? `A datasheet or image is also provided.` : "No file uploaded.";
-
     const prompt = `
-You are a technical parts analyst AI.
+You are TGE-AI, an intelligent industrial assistant.
+Given the following details, provide the following:
+1. Part Lifecycle status (Active, Obsolete, Limited)
+2. 2-3 equivalent alternatives from similar spec/tier brands
+3. Datasheet download URL if publicly available (or suggest to contact supplier)
 
-The customer provided:
-- Brand: ${brand}
-- Part Number: ${partNumber}
-- Description: ${description || "None provided"}
-- ${fileDetails}
-
-Return a JSON response including:
-1. lifecycle: one of ["Active", "Obsolete", "NRND", "Unknown"]
-2. alternatives: suggest 2-3 alternative brands and part numbers with similar spec and price tier.
-3. datasheet: a public datasheet link if possible.
-
-Be concise. Format the result as JSON only.
+Brand: ${brand}
+Part Number: ${partNumber}
+Description: ${description || "N/A"}
 `;
 
-    const completion = await openai.createChatCompletion({
-      model: "gpt-3.5-turbo", // <- SAFE and available to all API users
+    const chatCompletion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: prompt }],
-      temperature: 0.2,
     });
 
-    const rawReply = completion.data.choices[0].message.content;
-
-    // Try to safely parse GPT output
-    try {
-      const result = JSON.parse(rawReply);
-      res.json(result);
-    } catch (err) {
-      console.error("Error parsing JSON:", rawReply);
-      res.status(500).json({ error: "AI response malformed. Try again." });
-    }
+    const aiResponse = chatCompletion.choices[0].message.content;
+    res.json({ result: aiResponse });
   } catch (error) {
-    console.error("Server error:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("OpenAI Error:", error.message);
+    res.status(500).json({ error: "Something went wrong on the server." });
   }
 });
 
+// Test route
 app.get("/", (req, res) => {
-  res.send("✅ TGE SmartPart Backend Running.");
+  res.send("✅ TGE Smart Part Backend is Running!");
 });
 
 app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+  console.log(`🚀 Server running at http://localhost:${port}`);
 });
