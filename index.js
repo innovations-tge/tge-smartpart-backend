@@ -1,51 +1,54 @@
 const express = require("express");
-const bodyParser = require("body-parser");
 const cors = require("cors");
-const dotenv = require("dotenv");
 const multer = require("multer");
-const { Configuration, OpenAIApi } = require("openai");
-const fs = require("fs");
-
-dotenv.config();
+const bodyParser = require("body-parser");
+const { OpenAI } = require("openai");
+require("dotenv").config();
 
 const app = express();
-const upload = multer({ dest: "uploads/" }); // file upload middleware
+const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
+const upload = multer({ dest: "uploads/" });
 
-// 🔐 Initialize OpenAI with your API key
-const configuration = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY,
+// ✅ Set up OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
 });
-const openai = new OpenAIApi(configuration);
 
-// 📦 POST endpoint for part checker
-app.post("/check-part", upload.single("photo"), async (req, res) => {
-  const { brand, partNumber, description } = req.body;
-  const file = req.file;
-
+app.post("/check-part", upload.single("file"), async (req, res) => {
   try {
-    let prompt = `Brand: ${brand}\nPart Number: ${partNumber}\nDescription: ${description}\n\nCheck lifecycle status, compatibility, datasheet info, and suggest alternative parts.`;
+    const { brand, partNumber, description } = req.body;
 
-    // Optional: add file info if uploaded
-    if (file) {
-      prompt += `\n\n[User uploaded a datasheet image or label for analysis.]`;
-    }
+    const prompt = `
+You are a technical procurement assistant. Based on the following input:
 
-    const response = await openai.createChatCompletion({
-      model: "gpt-4",
-      messages: [{ role: "user", content: prompt }],
+Brand: ${brand}
+Part Number: ${partNumber}
+Description: ${description || "No description provided"}
+
+Please answer the following:
+1. Is the part number accurate and active? If not, explain.
+2. Is the item obsolete or still in production?
+3. Suggest 2-3 alternative brands and compatible part numbers of the same specification level.
+4. Provide a public URL link to the most relevant datasheet (or write 'Datasheet not found').
+
+Be clear and structured in your output.
+    `;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "user", content: prompt }]
     });
 
-    const reply = response.data.choices[0].message.content;
-    res.json({ result: reply });
+    res.json({ result: completion.choices[0].message.content });
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({ error: "Something went wrong. Please try again." });
+    console.error("❌ Error:", error.message);
+    res.status(500).json({ error: "Something went wrong." });
   }
 });
 
-// 🟢 Start the server
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(port, () => {
+  console.log(`✅ Server running on http://localhost:${port}`);
+});
