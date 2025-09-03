@@ -1,86 +1,83 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-const multer = require('multer');
-const { OpenAI } = require('openai');
-require('dotenv').config();
+const express = require("express");
+const multer = require("multer");
+const cors = require("cors");
+const { Configuration, OpenAIApi } = require("openai");
+const fs = require("fs");
+const path = require("path");
+
+require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 10000;
 
-// Middleware
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json());
 
-// Multer setup (for file upload)
+// Multer for file uploads (stored in memory)
 const storage = multer.memoryStorage();
-const upload = multer({ storage });
+const upload = multer({ storage: storage });
 
 // OpenAI setup
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+const configuration = new Configuration({
+  apiKey: process.env.OPENAI_API_KEY, // Store your key in Render as env var
 });
+const openai = new OpenAIApi(configuration);
 
-// Route
-app.post('/analyze-part', upload.single('file'), async (req, res) => {
-  const { brand, partNumber, description } = req.body;
-  const uploadedFile = req.file;
-
-  if (!brand || !partNumber) {
-    return res.status(400).json({ error: 'Brand and Part Number are required.' });
-  }
-
-  const fileInfo = uploadedFile
-    ? `A file named "${uploadedFile.originalname}" was uploaded for reference.`
-    : 'No file was uploaded.';
-
-  const prompt = `
-You are a procurement and industrial automation assistant.
-Analyze the following:
-
-Brand: ${brand}
-Part Number: ${partNumber}
-Description: ${description || 'N/A'}
-${fileInfo}
-
-Return your response in raw JSON format ONLY like this:
-{
-  "lifecycle": "Active",
-  "alternatives": ["BrandX Model123", "BrandY P456"],
-  "datasheet": "https://example.com/sample.pdf",
-  "summary": "This is a compact I/O module widely used in Allen-Bradley systems."
-}
-`;
-
+// Endpoint
+app.post("/analyze-part", upload.single("photo"), async (req, res) => {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
-        { role: "system", content: "You are an expert in industrial part analysis and alternatives." },
-        { role: "user", content: prompt }
-      ],
-      temperature: 0.4
-    });
+    const { brand, partNumber, description } = req.body;
+    const file = req.file;
 
-    const raw = response.choices[0].message.content;
-
-    // Safe parse
-    try {
-      const result = JSON.parse(raw);
-      res.json(result);
-    } catch (jsonError) {
-      console.error("⚠️ JSON Parse Failed:", raw);
-      res.status(500).json({ error: "TGE-AI could not return structured data. Please try again." });
+    if (!brand || !partNumber) {
+      return res.status(400).json({ error: "Brand and partNumber are required." });
     }
 
-  } catch (err) {
-    console.error("❌ OpenAI Error:", err.message);
-    res.status(500).json({ error: 'Internal server error while communicating with TGE-AI.' });
+    let fileDetails = file ? `A datasheet or image is also provided.` : "No file uploaded.";
+
+    const prompt = `
+You are a technical parts analyst AI.
+
+The customer provided:
+- Brand: ${brand}
+- Part Number: ${partNumber}
+- Description: ${description || "None provided"}
+- ${fileDetails}
+
+Return a JSON response including:
+1. lifecycle: one of ["Active", "Obsolete", "NRND", "Unknown"]
+2. alternatives: suggest 2-3 alternative brands and part numbers with similar spec and price tier.
+3. datasheet: a public datasheet link if possible.
+
+Be concise. Format the result as JSON only.
+`;
+
+    const completion = await openai.createChatCompletion({
+      model: "gpt-3.5-turbo", // <- SAFE and available to all API users
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+    });
+
+    const rawReply = completion.data.choices[0].message.content;
+
+    // Try to safely parse GPT output
+    try {
+      const result = JSON.parse(rawReply);
+      res.json(result);
+    } catch (err) {
+      console.error("Error parsing JSON:", rawReply);
+      res.status(500).json({ error: "AI response malformed. Try again." });
+    }
+  } catch (error) {
+    console.error("Server error:", error);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-// Server start
+app.get("/", (req, res) => {
+  res.send("✅ TGE SmartPart Backend Running.");
+});
+
 app.listen(port, () => {
-  console.log(`✅ Server running at http://localhost:${port}`);
+  console.log(`Server running at http://localhost:${port}`);
 });
